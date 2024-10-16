@@ -1,0 +1,16 @@
+{
+    "connect_list": [
+        {
+            "name": "lavacacao.ru 1",
+            "local_port": 80,
+            "remote_port": 80,
+            "remote_address": "lavacacao.ru"
+        },
+        {
+            "name": "lavacacao.ru 2",
+            "local_port": 81,
+            "remote_port": 80,
+            "remote_address": "lavacacao.ru"
+        }
+    ]
+}
