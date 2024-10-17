@@ -1,16 +1,16 @@
 {
     "connect_list": [
         {
-            "name": "lavacacao.ru 1",
-            "local_port": 80,
-            "remote_port": 80,
-            "remote_address": "lavacacao.ru"
+            "name": "Connect 1",
+            "local_port": 82,
+            "remote_port": 443,
+            "remote_address": "google.com"
         },
         {
-            "name": "lavacacao.ru 2",
-            "local_port": 81,
-            "remote_port": 80,
-            "remote_address": "lavacacao.ru"
+            "name": "Connect 2",
+            "local_port": 83,
+            "remote_port": 443,
+            "remote_address": "www.rust-lang.org"
         }
     ]
 }

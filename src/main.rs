@@ -1,6 +1,7 @@
 use chrono::Local;
 use serde::Deserialize;
 use serde::Serialize;
+use std::env;
 use std::fs::File;
 use std::io::BufReader;
 use tokio::io::{self};
@@ -20,11 +21,28 @@ pub struct Config {
     connect_list: Vec<ConfigConnect>,
 }
 
+fn get_config_file(args: &[String]) -> Option<String> {
+    if let Some(index) = args.iter().position(|arg| arg == "--config") {
+        if index + 1 < args.len() {
+            return Some(args[index + 1].clone());
+        }
+    }
+    None
+}
+
 fn load_config() -> Result<Config, std::io::Error> {
-    let config_file_name = String::from("rs-port-forward.config.json");
-    let mut config_file_path = String::from("/etc/");
-    if cfg!(target_os = "windows") {
-        config_file_path = String::from("");
+    let mut config_file_name = String::from("rs-port-forward.config.json");
+    let mut config_file_path = String::from("");
+
+    let args: Vec<String> = env::args().collect();
+    let config_file_from_args = get_config_file(&args);
+
+    if config_file_from_args.is_some() {
+        config_file_name = config_file_from_args.unwrap();
+    } else {
+        if !cfg!(target_os = "windows") {
+            config_file_path = String::from("/etc/");
+        }
     }
 
     let file_path = config_file_path + &config_file_name;
@@ -32,9 +50,7 @@ fn load_config() -> Result<Config, std::io::Error> {
 
     let file = File::open(file_path)?;
     let reader = BufReader::new(file);
-
     let config = serde_json::from_reader(reader)?;
-
     Ok(config)
 }
 
@@ -44,7 +60,11 @@ fn print_config() {
     for (index, item) in config.connect_list.iter().enumerate() {
         println!(
             "{} | Connection: {} >> local_port: {}, remote host:  {}, remote port: {}",
-            index+1, item.name, item.local_port, item.remote_address, item.remote_port
+            index + 1,
+            item.name,
+            item.local_port,
+            item.remote_address,
+            item.remote_port
         );
     }
 }
