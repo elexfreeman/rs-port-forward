@@ -72,6 +72,45 @@ cargo run -- --config config.json
 
 Программа загрузит конфигурацию из указанного файла, выведет список активных соединений, после чего начнет принимать входящие соединения и перенаправлять их на удаленные хосты.
 
+## Сборка для продакшена
+
+### Базовая сборка (оптимизированная)
+
+```bash
+cargo build --release
+```
+
+Готовый бинарный файл: `target/release/rs-port-forward` (Windows: `target\release\rs-port-forward.exe`).
+
+Рекомендуется уменьшить размер бинарника:
+
+```bash
+strip target/release/rs-port-forward    # Linux/macOS
+```
+
+### Статическая сборка для Linux (musl)
+
+Подходит для минимальных контейнеров и переносимых деплоев:
+
+```bash
+rustup target add x86_64-unknown-linux-musl
+cargo build --release --target x86_64-unknown-linux-musl
+# бинарник: target/x86_64-unknown-linux-musl/release/rs-port-forward
+```
+
+### Развертывание
+- Конфиг по умолчанию: `/etc/rs-port-forward.config.json` (или передайте путь через `--config`).
+- Запускайте под непривилегированным пользователем. Для портов <1024 в Linux используйте:
+
+```bash
+sudo setcap 'cap_net_bind_service=+ep' /path/to/rs-port-forward
+```
+
+- Рекомендуется оформить в виде сервиса (например, systemd) и перенаправить логи в journald/syslog.
+
+### Готовые сборки через GitHub Releases
+В репозитории настроен CI для релизов (`.github/workflows/release.yml`), публикующий артефакты для Windows, Linux (musl) и macOS. Скачайте нужный архив с вкладки Releases.
+
 ## Лицензия
 
 Этот проект распространяется по лицензии MIT.
