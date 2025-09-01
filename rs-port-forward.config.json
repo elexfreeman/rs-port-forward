@@ -1,16 +1,16 @@
 {
     "connect_list": [
         {
-            "name": "Connect 1",
-            "local_port": 82,
-            "remote_port": 443,
-            "remote_address": "google.com"
+            "name": "10.67.63.132",
+            "local_port": 8123,
+            "remote_port": 8123,
+            "remote_address": "10.67.63.132"
         },
         {
-            "name": "Connect 2",
-            "local_port": 83,
-            "remote_port": 443,
-            "remote_address": "www.rust-lang.org"
+            "name": "metrosync db",
+            "local_port": 27015,
+            "remote_port": 27017,
+            "remote_address": "10.67.7.190"
         }
     ]
 }
