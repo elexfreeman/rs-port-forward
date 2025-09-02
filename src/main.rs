@@ -351,17 +351,15 @@ async fn main() {
     if let Some(db) = db.clone() {
         let mut rx = log_tx.subscribe();
         let flush_every = Duration::from_secs(config.db_buffer_time_sec.unwrap_or(5));
-        let max_count = config.max_buffer_count.unwrap_or(10);
+        let max_count = config.max_buffer_count.unwrap_or(1000);
         tokio::spawn(async move {
             let mut buf: Vec<ConnectionRow> = Vec::with_capacity(max_count);
             let mut deadline = Instant::now() + flush_every;
             loop {
-                println!("count = {}", &buf.len());
                 if buf.len() >= max_count {
                     if let Err(e) = insert_connection_rows(&db, &buf).await {
                         eprintln!("Failed to batch write stats to SQLite: {}", e);
                     }
-                    println!("Вставка записей в DB count = {}", &buf.len());
                     buf.clear();
                     deadline = Instant::now() + flush_every;
                 }
