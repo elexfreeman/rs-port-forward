@@ -111,6 +111,46 @@ sudo setcap 'cap_net_bind_service=+ep' /path/to/rs-port-forward
 ### Готовые сборки через GitHub Releases
 В репозитории настроен CI для релизов (`.github/workflows/release.yml`), публикующий артефакты для Windows, Linux (musl) и macOS. Скачайте нужный архив с вкладки Releases.
 
+## Docker
+
+### Сборка образа
+
+Требуется установленный Docker (или Podman с совместимыми командами).
+
+```bash
+docker build -t rs-port-forward:latest .
+```
+
+Dockerfile использует многослойную сборку (builder + runtime) и кэширует зависимости для ускорения повторных сборок.
+
+### Запуск контейнера
+
+Рекомендуемый способ — смонтировать конфиг в путь по умолчанию и опубликовать локальные порты, указанные в конфиге:
+
+```bash
+# пример: локальные порты 8080 и 8081 из конфига
+docker run --rm \
+  -v $(pwd)/rs-port-forward.config.json:/etc/rs-port-forward.config.json:ro \
+  -p 8080:8080 -p 8081:8081 \
+  --name rs-port-forward \
+  rs-port-forward:latest
+```
+
+Альтернатива для Linux — использовать сетевой стек хоста (удобно, когда портов много):
+
+```bash
+docker run --rm \
+  --network host \
+  -v /path/to/rs-port-forward.config.json:/etc/rs-port-forward.config.json:ro \
+  --name rs-port-forward \
+  rs-port-forward:latest
+```
+
+Примечания:
+- По умолчанию бинарник ищет конфиг в `/etc/rs-port-forward.config.json`. Можно переопределить: `docker run … rs-port-forward:latest --config /path/to/config.json`.
+- Логи выводятся в stdout/stderr контейнера. Уровень логов настраивается `RUST_LOG`.
+- Для публикации нескольких портов добавьте по `-p <port>:<port>` для каждого локального `local_port` из конфига.
+
 ## Лицензия
 
 Этот проект распространяется по лицензии MIT.
