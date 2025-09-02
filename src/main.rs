@@ -133,7 +133,7 @@ async fn handle_connection(
                 local_port,
                 remote_address: remote_address.clone(),
                 remote_port,
-                client_addr: from_peer.map(|a| a.to_string()),
+                client_addr: from_peer.map(|a| a.ip().to_string()),
             });
 
             // Два направления копирования:
@@ -157,7 +157,7 @@ async fn handle_connection(
                                 local_port,
                                 remote_address: remote_address.clone(),
                                 remote_port,
-                                client_addr: from_peer.map(|a| a.to_string()),
+                                client_addr: from_peer.map(|a| a.ip().to_string()),
                                 error: String::from("Connection timeout (client->remote)")
                             });
                             return Err::<(), io::Error>(io::Error::new(
@@ -188,7 +188,7 @@ async fn handle_connection(
                                 local_port,
                                 remote_address: remote_address.clone(),
                                 remote_port,
-                                client_addr: from_peer.map(|a| a.to_string()),
+                                client_addr: from_peer.map(|a| a.ip().to_string()),
                                 error: String::from("Connection timeout (remote->client)")
                             });
                             return Err::<(), io::Error>(io::Error::new(
@@ -230,7 +230,7 @@ async fn handle_connection(
                 local_port,
                 remote_address: remote_address.clone(),
                 remote_port,
-                client_addr: from_peer.map(|a| a.to_string()),
+                client_addr: from_peer.map(|a| a.ip().to_string()),
                 bytes_from_to,
                 bytes_to_from,
             });
@@ -243,7 +243,7 @@ async fn handle_connection(
                 local_port,
                 remote_address,
                 remote_port,
-                client_addr: from_peer.map(|a| a.to_string()),
+                client_addr: from_peer.map(|a| a.ip().to_string()),
                 error: err.to_string(),
             });
         }
@@ -367,7 +367,7 @@ async fn main() {
                             Ok(LogEvent::ConnectionClosed { ts, name, local_port, remote_address, remote_port, client_addr, bytes_from_to, bytes_to_from }) => {
                                 buf.push(ConnectionRow {
                                     log_name: String::from("connection_closed"),
-                                    ts: ts.to_rfc3339(),
+                                    ts: ts.timestamp(),
                                     name,
                                     local_port,
                                     remote_address,
@@ -380,7 +380,7 @@ async fn main() {
                             Ok(LogEvent::ConnectionError { ts, name, local_port, remote_address, remote_port, client_addr, error }) => {
                                 buf.push(ConnectionRow {
                                     log_name: String::from("connection_error"),
-                                    ts: ts.to_rfc3339(),
+                                    ts: ts.timestamp(),
                                     name,
                                     local_port,
                                     remote_address,
@@ -393,7 +393,7 @@ async fn main() {
                             Ok(LogEvent::ConnectionTimeout { ts, name, local_port, remote_address, remote_port, client_addr, error }) => {
                                 buf.push(ConnectionRow {
                                     log_name: String::from("connection_timeout"),
-                                    ts: ts.to_rfc3339(),
+                                    ts: ts.timestamp(),
                                     name,
                                     local_port,
                                     remote_address,
@@ -406,7 +406,7 @@ async fn main() {
                             Ok(LogEvent::ConnectionStarted { ts, name, local_port, remote_address, remote_port, client_addr }) => {
                                 buf.push(ConnectionRow {
                                     log_name: String::from("connection_started"),
-                                    ts: ts.to_rfc3339(),
+                                    ts: ts.timestamp(),
                                     name,
                                     local_port,
                                     remote_address,

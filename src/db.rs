@@ -1,4 +1,4 @@
-use chrono::Utc;
+use chrono::{Utc, DateTime};
 use std::sync::Arc;
 use tokio_rusqlite::Connection as AsyncConnection;
 
@@ -6,12 +6,19 @@ pub type SharedDb = Arc<AsyncConnection>;
 
 #[derive(Clone, Debug)]
 pub struct ConnectionRow {
-    pub ts: String,
+    pub ts: i64,
     pub name: String,
     pub log_name: String,
     pub local_port: u16,
     pub remote_address: String,
     pub remote_port: u16,
+    pub client_addr: Option<String>,
+    pub bytes_from_to: u64,
+    pub bytes_to_from: u64,
+}
+
+#[derive(Clone, Debug)]
+pub struct ClientTraffic {
     pub client_addr: Option<String>,
     pub bytes_from_to: u64,
     pub bytes_to_from: u64,
@@ -26,7 +33,7 @@ pub async fn init_db(path: &str) -> anyhow::Result<SharedDb> {
                 r#"
                 CREATE TABLE IF NOT EXISTS connections (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    ts TEXT NOT NULL,
+                    ts INTEGER NOT NULL,
                     name TEXT,
                     log_name TEXT,
                     local_port INTEGER,
@@ -76,7 +83,7 @@ pub async fn insert_connection_row(
     bytes_from_to: u64,
     bytes_to_from: u64,
 ) -> anyhow::Result<()> {
-    let ts = Utc::now().to_rfc3339();
+    let ts: i64 = Utc::now().timestamp();
     let name = name.to_string();
     let remote_address = remote_address.to_string();
     db
@@ -142,4 +149,44 @@ pub async fn insert_connection_rows(db: &SharedDb, rows: &[ConnectionRow]) -> an
         })
         .await?;
     Ok(())
+}
+
+pub async fn query_traffic_by_client(
+    db: &SharedDb,
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+) -> anyhow::Result<Vec<ClientTraffic>> {
+    let start_s: i64 = start.timestamp();
+    let end_s: i64 = end.timestamp();
+    let result: Vec<ClientTraffic> = db
+        .call(move |c: &mut rusqlite::Connection| -> tokio_rusqlite::Result<Vec<ClientTraffic>> {
+            let mut stmt = c
+                .prepare(
+                    "SELECT client_addr,
+                            COALESCE(SUM(bytes_from_to), 0) AS sum_from_to,
+                            COALESCE(SUM(bytes_to_from), 0) AS sum_to_from
+                     FROM connections
+                     WHERE ts >= ?1 AND ts < ?2
+                     GROUP BY client_addr
+                     ORDER BY sum_from_to + sum_to_from DESC",
+                )
+                .map_err(tokio_rusqlite::Error::from)?;
+            let mut rows = stmt
+                .query(rusqlite::params![start_s, end_s])
+                .map_err(tokio_rusqlite::Error::from)?;
+            let mut out: Vec<ClientTraffic> = Vec::new();
+            while let Some(row) = rows.next().map_err(tokio_rusqlite::Error::from)? {
+                let client_addr: Option<String> = row.get(0).map_err(tokio_rusqlite::Error::from)?;
+                let sum_from_to: i64 = row.get(1).map_err(tokio_rusqlite::Error::from)?;
+                let sum_to_from: i64 = row.get(2).map_err(tokio_rusqlite::Error::from)?;
+                out.push(ClientTraffic {
+                    client_addr,
+                    bytes_from_to: (sum_from_to.max(0)) as u64,
+                    bytes_to_from: (sum_to_from.max(0)) as u64,
+                });
+            }
+            Ok(out)
+        })
+        .await?;
+    Ok(result)
 }
