@@ -18,6 +18,8 @@ mod db;
 use db::{init_db, insert_connection_rows, ConnectionRow, SharedDb};
 mod events;
 use events::LogEvent;
+mod web;
+use web::{run_http};
 
 /// Описание одного правила проброса порта.
 #[derive(Debug, Serialize, Deserialize)]
@@ -44,6 +46,8 @@ pub struct Config {
     db_buffer_time_sec: Option<u64>,
     /// Максимальный размер буфера записей, при достижении — немедленный флаш. По умолчанию 100.
     max_buffer_count: Option<usize>,
+    /// Адрес HTTP сервера, например "127.0.0.1:8080". Если не указан — веб-сервер не запускается.
+    http_listen: Option<String>,
 }
 
 /// Возвращает путь к конфигу, если он передан через аргументы `--config <path>`.
@@ -437,6 +441,17 @@ async fn main() {
                         deadline = Instant::now() + flush_every;
                     }
                 }
+            }
+        });
+    }
+
+    // HTTP сервер статистики
+    if let Some(addr) = &config.http_listen {
+        let state = web::AppState { db: db.clone() };
+        let addr = addr.clone();
+        tokio::spawn(async move {
+            if let Err(e) = run_http(&addr, state).await {
+                eprintln!("HTTP server error: {}", e);
             }
         });
     }

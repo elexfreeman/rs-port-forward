@@ -13,3 +13,4 @@ log = "0.4"
 tokio-rusqlite = "0.5"
 rusqlite = { version = "0.31", features = ["bundled"] }
 anyhow = "1"
+axum = { version = "0.7", features = ["macros"] }

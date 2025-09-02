@@ -2,6 +2,7 @@
     "database_path": "./rs-port-forward.db",
     "db_buffer_time_sec": 5,
     "max_buffer_count": 100,
+    "http_listen": "127.0.0.1:8080",
     "connect_list": [
         {
             "name": "10.67.63.132",

@@ -1,4 +1,5 @@
 use chrono::{Utc, DateTime};
+use serde::Serialize;
 use std::sync::Arc;
 use tokio_rusqlite::Connection as AsyncConnection;
 
@@ -17,7 +18,7 @@ pub struct ConnectionRow {
     pub bytes_to_from: u64,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct ClientTraffic {
     pub client_addr: Option<String>,
     pub bytes_from_to: u64,
