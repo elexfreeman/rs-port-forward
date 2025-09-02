@@ -11,8 +11,15 @@ use std::fs::File;
 use std::io::BufReader;
 use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::mpsc;
-use tokio::time::{timeout, Duration};
+use tokio::sync::{mpsc, broadcast};
+use tokio::time::{timeout, Duration, Instant, sleep_until};
+
+mod db;
+use db::{init_db, insert_connection_rows, ConnectionRow, SharedDb};
+mod events;
+use events::LogEvent;
+mod web;
+use web::{run_http};
 
 /// Описание одного правила проброса порта.
 #[derive(Debug, Serialize, Deserialize)]
@@ -33,6 +40,14 @@ pub struct ConfigConnect {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
     connect_list: Vec<ConfigConnect>,
+    /// Необязательный путь к SQLite базе для логирования.
+    database_path: Option<String>,
+    /// Период буферизации записей в БД (секунды). По умолчанию 5 сек.
+    db_buffer_time_sec: Option<u64>,
+    /// Максимальный размер буфера записей, при достижении — немедленный флаш. По умолчанию 100.
+    max_buffer_count: Option<usize>,
+    /// Адрес HTTP сервера, например "127.0.0.1:8080". Если не указан — веб-сервер не запускается.
+    http_listen: Option<String>,
 }
 
 /// Возвращает путь к конфигу, если он передан через аргументы `--config <path>`.
@@ -102,6 +117,8 @@ async fn handle_connection(
     remote_address: String,
     remote_port: u16,
     idle_timeout: Duration,
+    local_port: u16,
+    log_tx: broadcast::Sender<LogEvent>,
 ) {
     let from_peer = from.peer_addr().ok();
     match TcpStream::connect(format!("{}:{}", remote_address, remote_port)).await {
@@ -113,14 +130,15 @@ async fn handle_connection(
             let mut bytes_from_to: u64 = 0;
             let mut bytes_to_from: u64 = 0;
 
-            println!(
-                "{} {} New connection: from {:?} -> {}:{}",
-                Local::now().format("%Y-%m-%d %H:%M:%S"),
-                name,
-                from_peer,
-                remote_address,
-                remote_port
-            );
+            // Broadcast: connection started
+            let _ = log_tx.send(LogEvent::ConnectionStarted {
+                ts: chrono::Utc::now(),
+                name: name.clone(),
+                local_port,
+                remote_address: remote_address.clone(),
+                remote_port,
+                client_addr: from_peer.map(|a| a.ip().to_string()),
+            });
 
             // Два направления копирования:
             // - client -> remote (buf_a)
@@ -136,7 +154,16 @@ async fn handle_connection(
                         Ok(Ok(n)) => n,
                         Ok(Err(e)) => return Err::<(), io::Error>(e),
                         Err(_) => {
-                            eprintln!("{} {} Connection timeout (client->remote)", Local::now().format("%Y-%m-%d %H:%M:%S"), name);
+                            // Broadcast: connection timeout
+                            let _ = log_tx.send(LogEvent::ConnectionTimeout {
+                                ts: chrono::Utc::now(),
+                                name: name.clone(),
+                                local_port,
+                                remote_address: remote_address.clone(),
+                                remote_port,
+                                client_addr: from_peer.map(|a| a.ip().to_string()),
+                                error: String::from("Connection timeout (client->remote)")
+                            });
                             return Err::<(), io::Error>(io::Error::new(
                                 io::ErrorKind::TimedOut,
                                 "idle timeout (client->remote)",
@@ -158,7 +185,16 @@ async fn handle_connection(
                         Ok(Ok(n)) => n,
                         Ok(Err(e)) => return Err::<(), io::Error>(e),
                         Err(_) => {
-                            eprintln!("{} {} Connection timeout (remote->client)", Local::now().format("%Y-%m-%d %H:%M:%S"), name);
+                            // Broadcast: connection timeout
+                            let _ = log_tx.send(LogEvent::ConnectionTimeout {
+                                ts: chrono::Utc::now(),
+                                name: name.clone(),
+                                local_port,
+                                remote_address: remote_address.clone(),
+                                remote_port,
+                                client_addr: from_peer.map(|a| a.ip().to_string()),
+                                error: String::from("Connection timeout (remote->client)")
+                            });
                             return Err::<(), io::Error>(io::Error::new(
                                 io::ErrorKind::TimedOut,
                                 "idle timeout (remote->client)",
@@ -180,35 +216,40 @@ async fn handle_connection(
                 res = a_to_b => {
                     match res {
                         Ok(_) => (),
-                        Err(e) => eprintln!("{} {} Connection closed (client->remote): {}", Local::now().format("%Y-%m-%d %H:%M:%S"), name, e),
+                        Err(_) => (),
                     }
                 }
                 res = b_to_a => {
                     match res {
                         Ok(_) => (),
-                        Err(e) => eprintln!("{} {} Connection closed (remote->client): {}", Local::now().format("%Y-%m-%d %H:%M:%S"), name, e),
+                        Err(_) => (),
                     }
                 }
             }
 
-            println!(
-                "{} {} Disconnected {:?} -> {}:{} | bytes c->r: {}, r->c: {}",
-                Local::now().format("%Y-%m-%d %H:%M:%S"),
-                name,
-                from_peer,
-                remote_address,
+            // Broadcast: connection closed
+            let _ = log_tx.send(LogEvent::ConnectionClosed {
+                ts: chrono::Utc::now(),
+                name: name.clone(),
+                local_port,
+                remote_address: remote_address.clone(),
                 remote_port,
+                client_addr: from_peer.map(|a| a.ip().to_string()),
                 bytes_from_to,
-                bytes_to_from
-            );
+                bytes_to_from,
+            });
         }
         Err(err) => {
-            eprintln!(
-                "{} {} Error: {}",
-                Local::now().format("%A, %B %e %Y, %I:%M:%S %p"),
+            // Broadcast: connection error
+            let _ = log_tx.send(LogEvent::ConnectionError {
+                ts: chrono::Utc::now(),
                 name,
-                err
-            );
+                local_port,
+                remote_address,
+                remote_port,
+                client_addr: from_peer.map(|a| a.ip().to_string()),
+                error: err.to_string(),
+            });
         }
     }
 }
@@ -216,7 +257,10 @@ async fn handle_connection(
 /// Поднимает TCP‑слушатель на `local_port` и создаёт задачу `handle_connection`
 /// для каждого входящего подключения. Таймаут берётся из `idle_timeout_seconds`
 /// или используется значение по умолчанию.
-async fn port_forward(config_connect: &ConfigConnect) -> io::Result<()> {
+async fn port_forward(
+    config_connect: &ConfigConnect,
+    log_tx: broadcast::Sender<LogEvent>,
+) -> io::Result<()> {
     let listener = TcpListener::bind(format!("0.0.0.0:{}", config_connect.local_port)).await?;
 
     println!(
@@ -233,16 +277,31 @@ async fn port_forward(config_connect: &ConfigConnect) -> io::Result<()> {
                 let remote_address_clone = config_connect.remote_address.clone();
                 // Таймаут простоя на чтение в секундах; дефолт — 10 сек.
                 let idle = Duration::from_secs(config_connect.idle_timeout_seconds.unwrap_or(10));
+                let name = config_connect.name.clone();
+                let local_port = config_connect.local_port;
+                let log_tx_clone = log_tx.clone();
                 tokio::spawn(handle_connection(
-                    config_connect.name.clone(),
+                    name,
                     from,
                     remote_address_clone,
                     config_connect.remote_port,
                     idle,
+                    local_port,
+                    log_tx_clone,
                 ));
             }
             Err(err) => {
                 eprintln!("Error accepting connection: {}", err);
+                // Broadcast: accept error (без client_addr)
+                let _ = log_tx.send(LogEvent::ConnectionError {
+                    ts: chrono::Utc::now(),
+                    name: config_connect.name.clone(),
+                    local_port: config_connect.local_port,
+                    remote_address: config_connect.remote_address.clone(),
+                    remote_port: config_connect.remote_port,
+                    client_addr: None,
+                    error: err.to_string(),
+                });
             }
         }
     }
@@ -252,8 +311,24 @@ async fn port_forward(config_connect: &ConfigConnect) -> io::Result<()> {
 async fn main() {
     // Загружаем конфиг (panic при ошибке чтения/парсинга).
     let config = load_config().unwrap();
+    // Инициализация SQLite при наличии пути в конфиге
+    let db: Option<SharedDb> = match &config.database_path {
+        Some(path) => {
+            match init_db(path).await {
+                Ok(db) => Some(db),
+                Err(e) => {
+                    eprintln!("Failed to init SQLite at '{}': {}", path, e);
+                    None
+                }
+            }
+        }
+        None => None,
+    };
     // Канал зарезервирован под возможные сообщения (пока не используется).
     let (_tx, mut rx) = mpsc::channel::<String>(32);
+
+    // Broadcast-канал для логирования
+    let (log_tx, _log_rx) = broadcast::channel::<LogEvent>(1024);
     // Выводим список правил проброса.
     print_config();
     for item in config.connect_list.iter().enumerate() {
@@ -265,9 +340,117 @@ async fn main() {
             name: item.1.name.clone(),
             idle_timeout_seconds: item.1.idle_timeout_seconds,
         };
+        let log_tx_clone = log_tx.clone();
         tokio::spawn(async move {
             // Запускаем бесконечный цикл accept + spawn.
-            let _ = port_forward(&config_connect).await;
+            let _ = port_forward(&config_connect, log_tx_clone).await;
+        });
+    }
+
+    // Подписчик: запись в SQLite
+    if let Some(db) = db.clone() {
+        let mut rx = log_tx.subscribe();
+        let flush_every = Duration::from_secs(config.db_buffer_time_sec.unwrap_or(5));
+        let max_count = config.max_buffer_count.unwrap_or(1000);
+        tokio::spawn(async move {
+            let mut buf: Vec<ConnectionRow> = Vec::with_capacity(max_count);
+            let mut deadline = Instant::now() + flush_every;
+            loop {
+                if buf.len() >= max_count {
+                    if let Err(e) = insert_connection_rows(&db, &buf).await {
+                        eprintln!("Failed to batch write stats to SQLite: {}", e);
+                    }
+                    buf.clear();
+                    deadline = Instant::now() + flush_every;
+                }
+                tokio::select! {
+                    maybe_event = rx.recv() => {
+                        match maybe_event {
+                            Ok(LogEvent::ConnectionClosed { ts, name, local_port, remote_address, remote_port, client_addr, bytes_from_to, bytes_to_from }) => {
+                                buf.push(ConnectionRow {
+                                    log_name: String::from("connection_closed"),
+                                    ts: ts.timestamp(),
+                                    name,
+                                    local_port,
+                                    remote_address,
+                                    remote_port,
+                                    client_addr,
+                                    bytes_from_to,
+                                    bytes_to_from,
+                                });
+                            }
+                            Ok(LogEvent::ConnectionError { ts, name, local_port, remote_address, remote_port, client_addr, error }) => {
+                                buf.push(ConnectionRow {
+                                    log_name: String::from("connection_error"),
+                                    ts: ts.timestamp(),
+                                    name,
+                                    local_port,
+                                    remote_address,
+                                    remote_port,
+                                    client_addr,
+                                    bytes_from_to: 0,
+                                    bytes_to_from: 0,
+                                });
+                            }
+                            Ok(LogEvent::ConnectionTimeout { ts, name, local_port, remote_address, remote_port, client_addr, error }) => {
+                                buf.push(ConnectionRow {
+                                    log_name: String::from("connection_timeout"),
+                                    ts: ts.timestamp(),
+                                    name,
+                                    local_port,
+                                    remote_address,
+                                    remote_port,
+                                    client_addr,
+                                    bytes_from_to: 0,
+                                    bytes_to_from: 0,
+                                });
+                            }
+                            Ok(LogEvent::ConnectionStarted { ts, name, local_port, remote_address, remote_port, client_addr }) => {
+                                buf.push(ConnectionRow {
+                                    log_name: String::from("connection_started"),
+                                    ts: ts.timestamp(),
+                                    name,
+                                    local_port,
+                                    remote_address,
+                                    remote_port,
+                                    client_addr,
+                                    bytes_from_to: 0,
+                                    bytes_to_from: 0,
+                                });
+                            }
+                            Err(_) => {
+                                // Sender dropped; flush remaining and exit
+                                if !buf.is_empty() {
+                                    if let Err(e) = insert_connection_rows(&db, &buf).await {
+                                        eprintln!("Failed to batch write stats to SQLite: {}", e);
+                                    }
+                                }
+                                break;
+                            }
+                        }
+                    }
+                    _ = sleep_until(deadline) => {
+                        if !buf.is_empty() {
+                            if let Err(e) = insert_connection_rows(&db, &buf).await {
+                                eprintln!("Failed to batch write stats to SQLite: {}", e);
+                            }
+                            buf.clear();
+                        }
+                        deadline = Instant::now() + flush_every;
+                    }
+                }
+            }
+        });
+    }
+
+    // HTTP сервер статистики
+    if let Some(addr) = &config.http_listen {
+        let state = web::AppState { db: db.clone() };
+        let addr = addr.clone();
+        tokio::spawn(async move {
+            if let Err(e) = run_http(&addr, state).await {
+                eprintln!("HTTP server error: {}", e);
+            }
         });
     }
     // Ждём сообщений (блокирующая точка удерживает main живым).
