@@ -5,10 +5,10 @@
     "http_listen": "127.0.0.1:8080",
     "connect_list": [
         {
-            "name": "10.67.63.132",
-            "local_port": 8123,
-            "remote_port": 8123,
-            "remote_address": "10.67.63.132"
+            "name": "shadowsocks",
+            "local_port": 8388,
+            "remote_port": 8388,
+            "remote_address": "some-network.ru"
         },
         {
             "name": "metrosync db",

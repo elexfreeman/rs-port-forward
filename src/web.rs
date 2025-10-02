@@ -1,20 +1,33 @@
-use axum::{extract::{Query, State}, routing::get, Json, Router};
 use axum::response::Html;
+use axum::{
+    extract::{Query, State},
+    routing::get,
+    Json, Router,
+};
 use chrono::{DateTime, TimeZone, Utc};
 use serde::Deserialize;
-use std::net::SocketAddr;
 
 use crate::db::{query_traffic_by_client, ClientTraffic, SharedDb};
+
+#[derive(Clone, serde::Serialize)]
+pub struct ConnectInfo {
+    pub name: String,
+    pub local_port: u16,
+    pub remote_address: String,
+    pub remote_port: u16,
+}
 
 #[derive(Clone)]
 pub struct AppState {
     pub db: Option<SharedDb>,
+    pub connects: Vec<ConnectInfo>,
 }
 
 #[derive(Deserialize)]
 pub struct StatsQuery {
     pub start: String,
     pub end: String,
+    pub name: Option<String>,
 }
 
 fn parse_time(s: &str) -> Result<DateTime<Utc>, String> {
@@ -36,9 +49,15 @@ async fn stats_clients_handler(
     let end = parse_time(&q.end).map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e))?;
 
     if let Some(db) = state.db {
-        let rows = query_traffic_by_client(&db, start, end)
-            .await
-            .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        let rows = if let Some(name) = q.name.clone() {
+            crate::db::query_traffic_by_client_filtered(&db, start, end, Some(name))
+                .await
+                .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        } else {
+            query_traffic_by_client(&db, start, end)
+                .await
+                .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        };
         Ok(Json(rows))
     } else {
         Err((
@@ -48,10 +67,15 @@ async fn stats_clients_handler(
     }
 }
 
+async fn connects_handler(State(state): State<AppState>) -> Json<Vec<ConnectInfo>> {
+    Json(state.connects.clone())
+}
+
 pub async fn run_http(addr: &str, state: AppState) -> anyhow::Result<()> {
     let app = Router::new()
         .route("/", get(index_handler))
         .route("/stats/clients", get(stats_clients_handler))
+        .route("/config/connects", get(connects_handler))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
@@ -61,7 +85,8 @@ pub async fn run_http(addr: &str, state: AppState) -> anyhow::Result<()> {
 
 async fn index_handler() -> Html<&'static str> {
     // Simple Bootstrap-based page with a date range form and table
-    Html(r#"<!doctype html>
+    Html(
+        r#"<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8">
@@ -80,6 +105,12 @@ async fn index_handler() -> Html<&'static str> {
         <div class="col-auto">
           <label for="end" class="form-label">End</label>
           <input type="datetime-local" id="end" class="form-control" required>
+        </div>
+        <div class="col-auto">
+          <label for="conn" class="form-label">Connection</label>
+          <select id="conn" class="form-select">
+            <option value="">All connections</option>
+          </select>
         </div>
         <div class="col-auto">
           <button class="btn btn-primary" type="submit">Load</button>
@@ -133,11 +164,14 @@ async fn index_handler() -> Html<&'static str> {
         alertBox.classList.add('d-none');
         const startVal = document.getElementById('start').value;
         const endVal = document.getElementById('end').value;
+        const connVal = document.getElementById('conn').value;
         if (!startVal || !endVal) return;
         try {
           const startIso = toISOStringFromInputValue(startVal);
           const endIso = toISOStringFromInputValue(endVal);
-          const res = await fetch(`/stats/clients?start=${encodeURIComponent(startIso)}&end=${encodeURIComponent(endIso)}`);
+          const params = new URLSearchParams({ start: startIso, end: endIso });
+          if (connVal) params.set('name', connVal);
+          const res = await fetch(`/stats/clients?${params.toString()}`);
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const data = await res.json();
           const tbody = document.querySelector('#stats-table tbody');
@@ -160,6 +194,23 @@ async fn index_handler() -> Html<&'static str> {
         }
       }
 
+      async function loadConnects() {
+        try {
+          const res = await fetch('/config/connects');
+          if (!res.ok) return; // ignore silently if not available
+          const list = await res.json();
+          const sel = document.getElementById('conn');
+          list.forEach((c) => {
+            const opt = document.createElement('option');
+            opt.value = c.name;
+            opt.textContent = `${c.name} — ${c.remote_address}:${c.remote_port}`;
+            sel.appendChild(opt);
+          });
+        } catch (e) {
+          // ignore
+        }
+      }
+
       document.addEventListener('DOMContentLoaded', () => {
         const now = new Date();
         const weekAgo = new Date(now.getTime() - 7*24*60*60*1000);
@@ -169,10 +220,12 @@ async fn index_handler() -> Html<&'static str> {
           e.preventDefault();
           loadStats();
         });
+        loadConnects();
         loadStats();
       });
     </script>
   </body>
  </html>
-"#)
+"#,
+    )
 }

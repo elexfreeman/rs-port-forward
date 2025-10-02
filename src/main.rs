@@ -11,15 +11,15 @@ use std::fs::File;
 use std::io::BufReader;
 use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{mpsc, broadcast};
-use tokio::time::{timeout, Duration, Instant, sleep_until};
+use tokio::sync::{broadcast, mpsc};
+use tokio::time::{sleep_until, timeout, Duration, Instant};
 
 mod db;
 use db::{init_db, insert_connection_rows, ConnectionRow, SharedDb};
 mod events;
 use events::LogEvent;
 mod web;
-use web::{run_http};
+use web::{run_http, AppState, ConnectInfo};
 
 /// Описание одного правила проброса порта.
 #[derive(Debug, Serialize, Deserialize)]
@@ -162,12 +162,12 @@ async fn handle_connection(
                                 remote_address: remote_address.clone(),
                                 remote_port,
                                 client_addr: from_peer.map(|a| a.ip().to_string()),
-                                error: String::from("Connection timeout (client->remote)")
+                                error: String::from("Connection timeout (client->remote)"),
                             });
                             return Err::<(), io::Error>(io::Error::new(
                                 io::ErrorKind::TimedOut,
                                 "idle timeout (client->remote)",
-                            ))
+                            ));
                         }
                     };
                     // n == 0 означает EOF: клиент закрыл соединение.
@@ -193,12 +193,12 @@ async fn handle_connection(
                                 remote_address: remote_address.clone(),
                                 remote_port,
                                 client_addr: from_peer.map(|a| a.ip().to_string()),
-                                error: String::from("Connection timeout (remote->client)")
+                                error: String::from("Connection timeout (remote->client)"),
                             });
                             return Err::<(), io::Error>(io::Error::new(
                                 io::ErrorKind::TimedOut,
                                 "idle timeout (remote->client)",
-                            ))
+                            ));
                         }
                     };
                     // n == 0 означает EOF: удалённая сторона закрыла соединение.
@@ -313,15 +313,13 @@ async fn main() {
     let config = load_config().unwrap();
     // Инициализация SQLite при наличии пути в конфиге
     let db: Option<SharedDb> = match &config.database_path {
-        Some(path) => {
-            match init_db(path).await {
-                Ok(db) => Some(db),
-                Err(e) => {
-                    eprintln!("Failed to init SQLite at '{}': {}", path, e);
-                    None
-                }
+        Some(path) => match init_db(path).await {
+            Ok(db) => Some(db),
+            Err(e) => {
+                eprintln!("Failed to init SQLite at '{}': {}", path, e);
+                None
             }
-        }
+        },
         None => None,
     };
     // Канал зарезервирован под возможные сообщения (пока не используется).
@@ -445,7 +443,20 @@ async fn main() {
 
     // HTTP сервер статистики
     if let Some(addr) = &config.http_listen {
-        let state = web::AppState { db: db.clone() };
+        let connects: Vec<ConnectInfo> = config
+            .connect_list
+            .iter()
+            .map(|c| ConnectInfo {
+                name: c.name.clone(),
+                local_port: c.local_port,
+                remote_address: c.remote_address.clone(),
+                remote_port: c.remote_port,
+            })
+            .collect();
+        let state = AppState {
+            db: db.clone(),
+            connects,
+        };
         let addr = addr.clone();
         tokio::spawn(async move {
             if let Err(e) = run_http(&addr, state).await {
