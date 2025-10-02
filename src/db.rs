@@ -1,4 +1,4 @@
-use chrono::{Utc, DateTime};
+use chrono::{DateTime, Utc};
 use serde::Serialize;
 use std::sync::Arc;
 use tokio_rusqlite::Connection as AsyncConnection;
@@ -160,34 +160,110 @@ pub async fn query_traffic_by_client(
     let start_s: i64 = start.timestamp();
     let end_s: i64 = end.timestamp();
     let result: Vec<ClientTraffic> = db
-        .call(move |c: &mut rusqlite::Connection| -> tokio_rusqlite::Result<Vec<ClientTraffic>> {
-            let mut stmt = c
-                .prepare(
-                    "SELECT client_addr,
+        .call(
+            move |c: &mut rusqlite::Connection| -> tokio_rusqlite::Result<Vec<ClientTraffic>> {
+                let mut stmt = c
+                    .prepare(
+                        "SELECT client_addr,
                             COALESCE(SUM(bytes_from_to), 0) AS sum_from_to,
                             COALESCE(SUM(bytes_to_from), 0) AS sum_to_from
                      FROM connections
                      WHERE ts >= ?1 AND ts < ?2
                      GROUP BY client_addr
                      ORDER BY sum_from_to + sum_to_from DESC",
-                )
-                .map_err(tokio_rusqlite::Error::from)?;
-            let mut rows = stmt
-                .query(rusqlite::params![start_s, end_s])
-                .map_err(tokio_rusqlite::Error::from)?;
-            let mut out: Vec<ClientTraffic> = Vec::new();
-            while let Some(row) = rows.next().map_err(tokio_rusqlite::Error::from)? {
-                let client_addr: Option<String> = row.get(0).map_err(tokio_rusqlite::Error::from)?;
-                let sum_from_to: i64 = row.get(1).map_err(tokio_rusqlite::Error::from)?;
-                let sum_to_from: i64 = row.get(2).map_err(tokio_rusqlite::Error::from)?;
-                out.push(ClientTraffic {
-                    client_addr,
-                    bytes_from_to: (sum_from_to.max(0)) as u64,
-                    bytes_to_from: (sum_to_from.max(0)) as u64,
-                });
-            }
-            Ok(out)
-        })
+                    )
+                    .map_err(tokio_rusqlite::Error::from)?;
+                let mut rows = stmt
+                    .query(rusqlite::params![start_s, end_s])
+                    .map_err(tokio_rusqlite::Error::from)?;
+                let mut out: Vec<ClientTraffic> = Vec::new();
+                while let Some(row) = rows.next().map_err(tokio_rusqlite::Error::from)? {
+                    let client_addr: Option<String> =
+                        row.get(0).map_err(tokio_rusqlite::Error::from)?;
+                    let sum_from_to: i64 = row.get(1).map_err(tokio_rusqlite::Error::from)?;
+                    let sum_to_from: i64 = row.get(2).map_err(tokio_rusqlite::Error::from)?;
+                    out.push(ClientTraffic {
+                        client_addr,
+                        bytes_from_to: (sum_from_to.max(0)) as u64,
+                        bytes_to_from: (sum_to_from.max(0)) as u64,
+                    });
+                }
+                Ok(out)
+            },
+        )
+        .await?;
+    Ok(result)
+}
+
+pub async fn query_traffic_by_client_filtered(
+    db: &SharedDb,
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+    name: Option<String>,
+) -> anyhow::Result<Vec<ClientTraffic>> {
+    let start_s: i64 = start.timestamp();
+    let end_s: i64 = end.timestamp();
+    let name_opt = name.clone();
+    let result: Vec<ClientTraffic> = db
+        .call(
+            move |c: &mut rusqlite::Connection| -> tokio_rusqlite::Result<Vec<ClientTraffic>> {
+                let mut out: Vec<ClientTraffic> = Vec::new();
+                if let Some(name) = name_opt {
+                    let mut stmt = c
+                        .prepare(
+                            "SELECT client_addr,
+                                COALESCE(SUM(bytes_from_to), 0) AS sum_from_to,
+                                COALESCE(SUM(bytes_to_from), 0) AS sum_to_from
+                         FROM connections
+                         WHERE ts >= ?1 AND ts < ?2 AND name = ?3
+                         GROUP BY client_addr
+                         ORDER BY sum_from_to + sum_to_from DESC",
+                        )
+                        .map_err(tokio_rusqlite::Error::from)?;
+                    let mut rows = stmt
+                        .query(rusqlite::params![start_s, end_s, name])
+                        .map_err(tokio_rusqlite::Error::from)?;
+                    while let Some(row) = rows.next().map_err(tokio_rusqlite::Error::from)? {
+                        let client_addr: Option<String> =
+                            row.get(0).map_err(tokio_rusqlite::Error::from)?;
+                        let sum_from_to: i64 = row.get(1).map_err(tokio_rusqlite::Error::from)?;
+                        let sum_to_from: i64 = row.get(2).map_err(tokio_rusqlite::Error::from)?;
+                        out.push(ClientTraffic {
+                            client_addr,
+                            bytes_from_to: (sum_from_to.max(0)) as u64,
+                            bytes_to_from: (sum_to_from.max(0)) as u64,
+                        });
+                    }
+                } else {
+                    let mut stmt = c
+                        .prepare(
+                            "SELECT client_addr,
+                                COALESCE(SUM(bytes_from_to), 0) AS sum_from_to,
+                                COALESCE(SUM(bytes_to_from), 0) AS sum_to_from
+                         FROM connections
+                         WHERE ts >= ?1 AND ts < ?2
+                         GROUP BY client_addr
+                         ORDER BY sum_from_to + sum_to_from DESC",
+                        )
+                        .map_err(tokio_rusqlite::Error::from)?;
+                    let mut rows = stmt
+                        .query(rusqlite::params![start_s, end_s])
+                        .map_err(tokio_rusqlite::Error::from)?;
+                    while let Some(row) = rows.next().map_err(tokio_rusqlite::Error::from)? {
+                        let client_addr: Option<String> =
+                            row.get(0).map_err(tokio_rusqlite::Error::from)?;
+                        let sum_from_to: i64 = row.get(1).map_err(tokio_rusqlite::Error::from)?;
+                        let sum_to_from: i64 = row.get(2).map_err(tokio_rusqlite::Error::from)?;
+                        out.push(ClientTraffic {
+                            client_addr,
+                            bytes_from_to: (sum_from_to.max(0)) as u64,
+                            bytes_to_from: (sum_to_from.max(0)) as u64,
+                        });
+                    }
+                }
+                Ok(out)
+            },
+        )
         .await?;
     Ok(result)
 }
